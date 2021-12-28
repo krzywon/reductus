@@ -31,7 +31,7 @@ metadata_lookup = OrderedDict([
     ("analysis.filepurpose", "DAS_logs/trajectoryData/filePurpose"),
     ("sample.name", "DAS_logs/sample/name"),
     #("sample.description", "DAS_logs/sample/description"),
-    ("sample.labl", "DAS_logs/sample/description"), # compatibility
+    ("sample.labl", "DAS_logs/sample/description"),  # compatibility
     ("resolution.lmda" , "instrument/beam/monochromator/wavelength"),
     ("resolution.dlmda", "instrument/beam/monochromator/wavelength_spread"),
     ("m_det.beamx", "DAS_logs/middleRightAreaDetector/beamCenterX"),
@@ -65,14 +65,14 @@ metadata_lookup = OrderedDict([
     ("resolution.guide", "DAS_logs/guide/guide"),
     ("sample.position", "instrument/sample_aperture/distance"),
     ("electromagnet_lrm.field","DAS_logs/electromagnet_lrm/field"),
-    ("mag.value","DAS_logs/mag/value"),
+    ("mag[()]", "DAS_logs/mag/value"),
     ("acamplitude.voltage",  "DAS_logs/acAmplitude/voltage"),
     ("waveformgenerator.frequency",  "DAS_logs/waveformGenerator/frequency"),
     ("rfflipperpowersupply.voltage",  "DAS_logs/RFFlipperPowerSupply/actualVoltage/average_value"),
     ("rfflipperpowersupply.frequency",  "DAS_logs/RFFlipperPowerSupply/frequency"),
     ("huberRotation.softPosition",  "DAS_logs/huberRotation/softPosition"),
-    ("start_time","start_time"),
-    ("end_time","end_time"),
+    ("start_time", "start_time"),
+    ("end_time", "end_time"),
     ("eventfile", "DAS_logs/areaDetector/eventFileName"),
     ("he3_back.opacity", "DAS_logs/backPolarization/opacityAt1Ang"),
     ("he3_back.te", "DAS_logs/backPolarization/glassTransmission"),
@@ -80,7 +80,7 @@ metadata_lookup = OrderedDict([
 
 he3_metadata_lookup = OrderedDict([
     ("run.filename", "DAS_logs/trajectoryData/fileName"),
-    ("sample.labl", "DAS_logs/sample/description"), # compatibility
+    ("sample.labl", "DAS_logs/sample/description"),  # compatibility
     ("analysis.intent", "DAS_logs/trajectoryData/intent"),
     ("analysis.filepurpose", "DAS_logs/trajectoryData/filePurpose"),
     ("he3_back.starttime", "DAS_logs/backPolarization/timestamp"),
@@ -95,12 +95,12 @@ he3_metadata_lookup = OrderedDict([
     ("run.moncnt", "control/monitor_counts"),
     ("run.atten", "instrument/attenuator/num_atten_dropped"),
     ("sample.name", "DAS_logs/sample/name"),
-    ("resolution.lmda" , "instrument/beam/monochromator/wavelength"),
+    ("resolution.lmda", "instrument/beam/monochromator/wavelength"),
     ("resolution.dlmda", "instrument/beam/monochromator/wavelength_spread"),
     ("m_det.dis_des", "DAS_logs/carriage2Trans/desiredSoftPosition"),
     ("f_det.dis_des", "DAS_logs/carriage1Trans/desiredSoftPosition"),
-    ("start_time","start_time"),
-    ("end_time","end_time"),
+    ("start_time", "start_time"),
+    ("end_time", "end_time"),
     ("eventfile", "DAS_logs/areaDetector/eventFileName")
 ])
 
@@ -116,16 +116,15 @@ unit_specifiers = {
 }
 
 def process_sourceAperture(field, units):
-    import numpy as np
     def handler(v):
         if _s(v) == 'OUT':
             return v
         else:
             return np.float(v.split()[0])
     handle_values = np.vectorize(handler)
-    value = handle_values(field.value)
+    value = handle_values(field[()])
     units_from = ""
-    v0 = field.value[0].split()
+    v0 = field[()][0].split()
     if _s(value[0]) == 'OUT':
         return value
     if len(v0) > 1:
@@ -133,7 +132,7 @@ def process_sourceAperture(field, units):
     if type(units_from) == bytes:
         units_from = units_from.decode('utf-8')
     converter = unit.Converter(units_from)
-    return converter(value, units)    
+    return converter(value, units)
 
 def data_as(field, units):
     """
@@ -146,7 +145,7 @@ def data_as(field, units):
         if type(units_in) == bytes:
             units_in = units_in.decode('utf-8')
         converter = unit.Converter(units_in)
-        value = converter(field.value, units)
+        value = converter(field[()], units)
         return value
 
 def load_detector(dobj, load_data=True):
@@ -163,15 +162,19 @@ def load_detector(dobj, load_data=True):
             detector[k]['attrs']['dtype'] = subobj.dtype.name
     return detector
 
-def load_metadata(entry, multiplicity=1, i=1, metadata_lookup=metadata_lookup, unit_specifiers=unit_specifiers):
+def load_metadata(entry, multiplicity=1, i=1, lookup_dict=None, unit_lookup=None):
     metadata = OrderedDict()
-    for mkey in metadata_lookup:
-        field = entry.get(metadata_lookup[mkey], None)
+    if lookup_dict is None:
+        lookup_dict = metadata_lookup
+    if unit_lookup is None:
+        unit_lookup = unit_specifiers
+    for mkey in lookup_dict:
+        field = entry.get(lookup_dict[mkey], None)
         if field is not None:
-            if mkey in unit_specifiers:
-                field = data_as(field, unit_specifiers[mkey])
+            if mkey in unit_lookup:
+                field = data_as(field, unit_lookup[mkey])
             else:
-                field = field.value
+                field = field[()]
             if field.dtype.kind == 'f':
                 field = field.astype("float")
             elif field.dtype.kind == 'i':
@@ -185,27 +188,18 @@ def load_metadata(entry, multiplicity=1, i=1, metadata_lookup=metadata_lookup, u
             metadata[mkey] = field
     return metadata
 
-def readVSANSNexuz(input_file, file_obj=None, metadata_lookup=metadata_lookup, load_data=True):
+def readVSANSNexuz(input_file, file_obj=None, lookup_dict=None, load_data=True):
     """
     Load all entries from the NeXus file into sans data sets.
     """
     datasets = []
     file = h5_open_zip(input_file, file_obj)
+    if lookup_dict is None:
+        lookup_dict = metadata_lookup
     for entryname, entry in file.items():
-        #areaDetector = entry['data/areaDetector'].value
-        #shape = areaDetector.shape
-        #if len(shape) < 2 or len(shape) > 3:
-        #    raise ValueError("areaDetector data must have dimension 2 or 3")
-        #    return
-        #if len(shape) == 2:
-            # add another dimension at the front
-        #    shape = (1,) + shape
-        #    areaDetector = areaDetector.reshape(shape)
-        
         multiplicity = 1
         for i in range(multiplicity):
-            metadata = load_metadata(entry, multiplicity, i, metadata_lookup=metadata_lookup, unit_specifiers=unit_specifiers)
-            #print(metadata)
+            metadata = load_metadata(entry, multiplicity, i, lookup_dict=lookup_dict, unit_lookup=unit_specifiers)
             detector_keys = [n for n in entry['instrument'] if n.startswith('detector_')]
             detectors = dict([(k, load_detector(entry['instrument'][k], load_data=load_data)) for k in detector_keys])
             metadata['entry'] = entryname
@@ -231,6 +225,6 @@ def _toDictItem(obj, convert_bytes=False):
         obj = [_toDictItem(a, convert_bytes=convert_bytes) for a in obj]
     elif isinstance(obj, dict):
         obj = OrderedDict([(k, _toDictItem(v, convert_bytes=convert_bytes)) for k, v in obj.items()])
-    elif isinstance(obj, bytes) and convert_bytes == True:
+    elif isinstance(obj, bytes) and convert_bytes is True:
         obj = obj.decode()
     return obj

@@ -293,24 +293,28 @@ def LoadSANS(filelist=None, flip=False, transpose=False, check_timestamps=True):
         sansdata.extend(to_sansdata(r, flip=flip, transpose=transpose))
     return sansdata
 
+
 def to_sansdata(rawdata, flip=False, transpose=False):
-    areaDetector = rawdata.detectors['detector']['data']['value']
-    shape = areaDetector.shape
-    if len(shape) < 2 or len(shape) > 3:
-        raise ValueError("areaDetector data must have dimension 2 or 3")
-        return
-    if len(shape) == 2:
-        # add another dimension at the front
-        shape = (1,) + shape
-        areaDetector = areaDetector.reshape(shape)
+    from .loader import get_all_by_attribute
+    detector_keys = get_all_by_attribute(rawdata.detectors, 'NXdetector')
+    area_detectors = [rawdata.detectors[key]['data']['value'] for key in detector_keys]
     datasets = []
-    for i in range(shape[0]):
-        subset = areaDetector[i].copy()
-        if flip:
-            subset = np.fliplr(subset)
-        if transpose:
-            subset = subset.T
-        datasets.append(SansData(data=subset, metadata=rawdata.metadata))
+    for area_detector in area_detectors:
+        shape = area_detector.shape
+        if len(shape) < 2 or len(shape) > 3:
+            raise ValueError("areaDetector data must have dimension 2 or 3")
+            return
+        if len(shape) == 2:
+            # add another dimension at the front
+            shape = (1,) + shape
+            area_detector = area_detector.reshape(shape)
+        for i in range(shape[0]):
+            subset = area_detector[i].copy()
+            if flip:
+                subset = np.fliplr(subset)
+            if transpose:
+                subset = subset.T
+            datasets.append(SansData(data=subset, metadata=rawdata.metadata))
     return datasets
 
 """

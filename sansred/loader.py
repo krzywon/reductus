@@ -4,17 +4,13 @@ SANS data loader
 
 Load SANS NeXus file into :mod:`sansred.sansdata` data structure.
 """
-import io
-from zipfile import ZipFile, is_zipfile
 from collections import OrderedDict
-import h5py
 
-from dataflow.lib import hzf_readonly_stripped as hzf
 from dataflow.lib import unit
 from dataflow.lib.h5_open import h5_open_zip
 
 from vsansred.loader import load_detector, load_metadata
-from vsansred.steps import _s, _b
+from vsansred.steps import _s
 
 from .sansdata import SansData, RawSANSData
 
@@ -25,16 +21,16 @@ metadata_lookup = OrderedDict([
     ("det.des_dis", "DAS_logs/detectorPosition/desiredSoftPosition"),
     ("det.dis", "DAS_logs/detectorPosition/softPosition"),
     ("run.guide", "DAS_logs/guide/guide"),
-    ("sample.description", "DAS_logs/sample/description"), # overwritten on load
-    ("sample.labl", "DAS_logs/sample/description"), # compatibility
+    ("sample.description", "DAS_logs/sample/description"),  # overwritten on load
+    ("sample.labl", "DAS_logs/sample/description"),  # compatibility
     ("resolution.lmda", "instrument/monochromator/wavelength"),
     ("resolution.dlmda", "instrument/monochromator/wavelength_error"),
     ("det.beamx", "instrument/detector/beam_center_x"),
     ("det.beamy", "instrument/detector/beam_center_y"),
     ("det.bstop", "DAS_logs/beamStop/size"),
-    #("det.pixeloffsetx", "instrument/detector/x_offset"), # this is useless
+    # ("det.pixeloffsetx", "instrument/detector/x_offset"), # this is useless
     ("det.pixelsizex", "instrument/detector/x_pixel_size"),
-    #("det.pixeloffsety", "instrument/detector/y_offset"), # this is also useless
+    # ("det.pixeloffsety", "instrument/detector/y_offset"), # this is also useless
     ("det.pixelsizey", "instrument/detector/y_pixel_size"),
     ("sample.name", "DAS_logs/sample/name"),
     ("polarization.front", "DAS_logs/frontPolarization/direction"),
@@ -60,15 +56,15 @@ metadata_lookup = OrderedDict([
     ("resolution.ap2Off", "instrument/sample_aperture/distance"),
     ("resolution.ap12dis", "DAS_logs/geometry/sourceApertureToSampleAperture"),
     ("sample.position", "DAS_logs/geometry/samplePositionOffset"),
-    ("electromagnet_lrm.field","DAS_logs/electromagnet_lrm/field"),
-    ("mag.value","DAS_logs/mag/value"),
+    ("electromagnet_lrm.field", "DAS_logs/electromagnet_lrm/field"),
+    ("mag[()]", "DAS_logs/mag/value"),
     ("acamplitude.voltage",  "DAS_logs/acAmplitude/voltage"),
     ("waveformgenerator.frequency",  "DAS_logs/waveformGenerator/frequency"),
     ("rfflipperpowersupply.voltage",  "DAS_logs/RFFlipperPowerSupply/actualVoltage/average_value"),
     ("rfflipperpowersupply.frequency",  "DAS_logs/RFFlipperPowerSupply/frequency"),
     ("huberRotation.softPosition",  "DAS_logs/huberRotation/softPosition"),
-    ("start_time","start_time"),
-    ("end_time","end_time"),
+    ("start_time", "start_time"),
+    ("end_time", "end_time"),
     ("eventfile", "DAS_logs/areaDetector/eventFileName"),
 ])
 
@@ -86,45 +82,59 @@ unit_specifiers = {
 
 def process_sourceAperture(field, units):
     import numpy as np
+
     def handler(v):
         return np.float(v.split()[0])
+
     handle_values = np.vectorize(handler)
-    value = handle_values(field.value)
+    value = handle_values(field[()])
     units_from = ""
-    v0 = field.value[0].split()
+    v0 = field[()][0].split()
     if len(v0) > 1:
         units_from = v0[1]
     if type(units_from) == bytes:
         units_from = units_from.decode('utf-8')
     converter = unit.Converter(units_from)
-    return converter(value, units)    
+    return converter(value, units)
+
+def get_all_by_attribute(entry, attr):
+    # type: (dict, str) -> list
+    """
+    Get all Nexus names with the attribute, attr, from the base entry
+    """
+    keys = [n for n in entry if attr in entry[n].attrs.keys()]
+    return keys
 
 def data_as(field, units):
     """
     Return value of field in the desired units.
     """
-    if field.name.split('/')[-1] == 'sourceAperture':
+    name = field.name.split('/')[-1]
+    if 'source' in name.lower() and 'aperture' in name.lower():
+        # print('Source aperture in a generic way!')
         return process_sourceAperture(field, units)
     else:
         units_in = field.attrs.get('units', '')
         if type(units_in) == bytes:
             units_in = units_in.decode('utf-8')
         converter = unit.Converter(units_in)
-        value = converter(field.value, units)
+        value = converter(field[()], units)
         return value
 
-def readSANSNexuz(input_file, file_obj=None, metadata_lookup=metadata_lookup):
+def readSANSNexuz(input_file, file_obj=None, lookup_dict=None):
     """
     Load all entries from the NeXus file into sans data sets.
     """
     datasets = []
     file = h5_open_zip(input_file, file_obj)
+    if lookup_dict is None:
+        lookup_dict = metadata_lookup
     for entryname, entry in file.items():        
         multiplicity = 1
         for i in range(multiplicity):
-            metadata = load_metadata(entry, multiplicity, i, metadata_lookup=metadata_lookup, unit_specifiers=unit_specifiers)
-            #print(metadata)
-            detector_keys = ['detector']
+            metadata = load_metadata(entry, multiplicity, i, lookup_dict=lookup_dict, unit_lookup=unit_specifiers)
+            # print(metadata)
+            detector_keys = get_all_by_attribute(entry['instrument'], 'NXdetector')
             detectors = dict([(k, load_detector(entry['instrument'][k])) for k in detector_keys])
             metadata['entry'] = entryname
             # hack to remove configuration from sample label (it is still stored in run.configuration)
@@ -141,15 +151,14 @@ def readSANSNexuz_old(input_file, file_obj=None):
     datasets = []
     file = h5_open_zip(input_file, file_obj)
     for entryname, entry in file.items():
-        areaDetector = entry['data/areaDetector'].value
-        shape = areaDetector.shape
+        area_detector = entry['data/areaDetector'][()]
+        shape = area_detector.shape
         if len(shape) < 2 or len(shape) > 3:
             raise ValueError("areaDetector data must have dimension 2 or 3")
-            return
         if len(shape) == 2:
             # add another dimension at the front
             shape = (1,) + shape
-            areaDetector = areaDetector.reshape(shape)
+            area_detector = area_detector.reshape(shape)
             
         for i in range(shape[0]):
             metadata = {}
@@ -159,7 +168,7 @@ def readSANSNexuz_old(input_file, file_obj=None):
                     if mkey in unit_specifiers:
                         field = data_as(field, unit_specifiers[mkey])
                     else:
-                        field = field.value
+                        field = field[()]
                     if field.dtype.kind == 'f':
                         field = field.astype("float")
                     elif field.dtype.kind == 'i':
@@ -173,7 +182,7 @@ def readSANSNexuz_old(input_file, file_obj=None):
                     metadata[mkey] = field
 
             metadata['entry'] = entryname
-            dataset = SansData(data=areaDetector[i].copy(), metadata=metadata)
+            dataset = SansData(data=area_detector[i].copy(), metadata=metadata)
             datasets.append(dataset)            
 
     return datasets
